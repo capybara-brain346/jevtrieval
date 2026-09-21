@@ -1,46 +1,45 @@
 # jevtrieval
 
-## Local setup
+A small FastAPI demo that retrieves documents from Qdrant, scores them with Jev, and generates a cited answer.
 
-Requirements: Go 1.26+ and Docker with the Compose plugin. PostgreSQL is run only in Docker.
+## Architecture
+
+- Qdrant stores only document vectors and payloads.
+- Requests, questions, probabilities, and answers live only for the duration of one HTTP request.
+- `POST /v1/search` returns one complete JSON response. There are no SQL tables, run records, background jobs, or event streams.
+
+The included SciFact JSONL file can be embedded into Qdrant once through `POST /v1/index`. The route is idempotent after all 5,183 documents are present; application startup never performs an expensive hidden import.
+
+## Run
 
 ```sh
 cp .env.example .env
-set -a
-. ./.env
-set +a
+# Add OPENROUTER_API_KEY to .env.
 
-docker info
-docker compose config
-docker compose up -d --wait postgres
-docker compose ps
-docker compose exec postgres pg_isready -U jevtrieval -d jevtrieval
+docker compose up -d --wait qdrant
+uv sync
+uv run python -m unittest discover -s tests
+uv run --env-file .env uvicorn backend.app:app --reload --port 8080
+
+# Run once to embed data/scifact/docs.jsonl into Qdrant.
+curl -X POST http://localhost:8080/v1/index
 ```
 
-The database is available at the `DATABASE_URL` in `.env`. Compose stores its data in the `postgres_data` volume.
-
-## Backend commands
-
-Run these from the repository root:
+Start the frontend separately:
 
 ```sh
-# Apply the idempotent schema migration.
-docker compose exec -T postgres \
-  psql -U jevtrieval -d jevtrieval \
-  < db/migrations/001_init.sql
-
-# Import and embed the SciFact corpus (use -replace to change embedding models).
-go run ./cmd/import-scifact
-
-# Run the test suite and static checks.
-go test ./...
-go vet ./...
-
-# Run an offline evaluation when SciFact qrels are available.
-go run ./cmd/eval
-
-# Start the HTTP API.
-go run ./cmd/server
+cd web
+cp .env.example .env.local
+npm install
+npm run dev
 ```
 
-The API listens on `HTTP_ADDR` (default `:8080`). The frontend origin is controlled by `ALLOWED_ORIGIN`; do not use a wildcard origin.
+## API
+
+```text
+GET  /healthz
+POST /v1/index
+POST /v1/search  {"query":"..."}
+```
+
+The search response contains the generated questions, retrieved documents, each question/document Jev probability, and the final answer.
