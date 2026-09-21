@@ -27,6 +27,7 @@ type hfRowsResponse struct {
 	Rows []struct {
 		Row sourceDocument `json:"row"`
 	} `json:"rows"`
+	Error string `json:"error"`
 }
 
 func main() {
@@ -69,6 +70,9 @@ func main() {
 	if len(documents) == 0 {
 		fatal(fmt.Errorf("SciFact document source was empty"))
 	}
+	if err := validateDocuments(documents); err != nil {
+		fatal(err)
+	}
 	ids := make([]string, len(documents))
 	for i, document := range documents {
 		ids[i] = document.DocID
@@ -80,16 +84,13 @@ func main() {
 	pending := make([]store.Document, 0, len(documents))
 	skipped := 0
 	for _, document := range documents {
-		if strings.TrimSpace(document.DocID) == "" || strings.TrimSpace(document.Title) == "" || strings.TrimSpace(document.Text) == "" {
-			fatal(fmt.Errorf("invalid document %q: doc_id, title, and text are required", document.DocID))
-		}
 		model, exists := models[document.DocID]
-		if exists && model != cfg.OpenRouterEmbeddingModel && !replace {
-			fatal(fmt.Errorf("document %s has embedding model %q; rerun with -replace to replace it", document.DocID, model))
-		}
-		if exists && model == cfg.OpenRouterEmbeddingModel && !replace {
+		if exists && model == cfg.OpenRouterEmbeddingModel {
 			skipped++
 			continue
+		}
+		if exists && !replace {
+			fatal(fmt.Errorf("document %s has embedding model %q; rerun with -replace to replace it", document.DocID, model))
 		}
 		pending = append(pending, store.Document{DocID: document.DocID, Title: document.Title, Body: document.Text})
 	}
@@ -160,6 +161,9 @@ func fetchDocuments(ctx context.Context, endpoint string) ([]sourceDocument, err
 		if err := json.Unmarshal(body, &page); err != nil {
 			return nil, err
 		}
+		if page.Error != "" {
+			return nil, fmt.Errorf("datasets-server returned an error: %s", page.Error)
+		}
 		for _, row := range page.Rows {
 			result = append(result, row.Row)
 		}
@@ -167,6 +171,20 @@ func fetchDocuments(ctx context.Context, endpoint string) ([]sourceDocument, err
 			return result, nil
 		}
 	}
+}
+
+func validateDocuments(documents []sourceDocument) error {
+	seen := make(map[string]struct{}, len(documents))
+	for i, document := range documents {
+		if strings.TrimSpace(document.DocID) == "" || strings.TrimSpace(document.Title) == "" || strings.TrimSpace(document.Text) == "" {
+			return fmt.Errorf("invalid document %d (%q): doc_id, title, and text are required", i, document.DocID)
+		}
+		if _, exists := seen[document.DocID]; exists {
+			return fmt.Errorf("duplicate document id %q", document.DocID)
+		}
+		seen[document.DocID] = struct{}{}
+	}
+	return nil
 }
 
 func readLocalDocuments(path string) ([]sourceDocument, error) {
