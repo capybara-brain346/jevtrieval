@@ -1,6 +1,6 @@
 # jevtrieval
 
-A small FastAPI demo that retrieves documents from Qdrant, scores them with Jev, and generates a cited answer.
+A small FastAPI demo that retrieves documents from Qdrant, scores them with Jev, and generates an evidence-grounded answer.
 
 ## Architecture
 
@@ -42,4 +42,4 @@ POST /v1/index
 POST /v1/search  {"query":"..."}
 ```
 
-The search response contains the generated questions, retrieved documents, each question/document Jev probability, and the final answer.
+The search response contains the generated questions and up to five documents selected from 25 vector candidates. Documents need at least 0.5 direct-query relevance; eligible documents are selected using 70% direct relevance and 30% question-coverage gain.

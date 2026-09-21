@@ -85,6 +85,10 @@ export default function HomePage() {
                         <p className="shrink-0 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 py-1 font-mono text-xs tabular-nums text-neutral-700">Vector {formatProbability(document.vector_score)}</p>
                       </div>
                       <ul className="mt-4 grid gap-2">
+                        <li className="flex flex-col justify-between gap-1 rounded-md bg-neutral-50 px-3 py-2.5 sm:flex-row sm:gap-4">
+                          <span className="text-sm font-medium text-neutral-900">Direct query relevance</span>
+                          {document.query_error ? <span className="shrink-0 text-sm font-medium text-red-700">Failed</span> : <span className="shrink-0 font-mono text-sm font-semibold tabular-nums text-neutral-950">{formatProbability(document.query_probability!)}</span>}
+                        </li>
                         {document.probabilities.map((item) => (
                           <li key={item.question} className="flex flex-col justify-between gap-1 rounded-md bg-neutral-50 px-3 py-2.5 sm:flex-row sm:gap-4">
                             <span className="text-sm text-neutral-700 text-pretty">{item.question}</span>

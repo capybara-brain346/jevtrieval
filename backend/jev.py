@@ -62,19 +62,33 @@ async def _score(
 
 
 async def score_documents(
-    documents: list[dict[str, Any]], questions: list[str], client: httpx.AsyncClient
+    documents: list[dict[str, Any]],
+    query: str,
+    questions: list[str],
+    client: httpx.AsyncClient,
 ) -> list[dict[str, Any]]:
     semaphore = asyncio.Semaphore(int(os.getenv("JEV_CONCURRENCY", "8")))
+    relevance_question = (
+        "Does this document contain substantive evidence useful for answering "
+        f"the user's query: {query}"
+    )
+    scoring_questions = [relevance_question, *questions]
 
     async def score(document: dict[str, Any]) -> dict[str, Any]:
         try:
             async with semaphore:
-                probabilities = await _score(document, questions, client)
+                probabilities = await _score(document, scoring_questions, client)
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
             probabilities = [
                 {"question": question, "probability": None, "error": str(error)}
-                for question in questions
+                for question in scoring_questions
             ]
-        return {**document, "probabilities": probabilities}
+        relevance, *helper_probabilities = probabilities
+        return {
+            **document,
+            "query_probability": relevance["probability"],
+            "query_error": relevance["error"],
+            "probabilities": helper_probabilities,
+        }
 
     return list(await asyncio.gather(*(score(document) for document in documents)))

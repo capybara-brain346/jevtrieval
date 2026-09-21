@@ -10,9 +10,9 @@ export const metadata: Metadata = {
 const stages = [
   ["01", "Decompose", "Turn one research query into 2–6 focused evidence questions."],
   ["02", "Embed", "Convert the original query into a semantic vector."],
-  ["03", "Retrieve", "Find the closest documents in the Qdrant index."],
-  ["04", "Verify", "Score every document against every evidence question."],
-  ["05", "Synthesize", "Write one grounded answer with document citations."],
+  ["03", "Retrieve", "Find 25 candidate documents in the Qdrant index."],
+  ["04", "Verify", "Reject irrelevant documents, then select up to five."],
+  ["05", "Synthesize", "Write one answer from only the selected document contents."],
 ] as const;
 
 export default function HowItWorksPage() {
@@ -24,7 +24,7 @@ export default function HowItWorksPage() {
         <section className="mx-auto max-w-3xl text-center">
           <p className="text-sm font-medium text-neutral-500">How our retrieval works</p>
           <h1 className="mt-3 text-4xl font-semibold text-neutral-950 text-balance sm:text-5xl">From a question to evidence you can inspect.</h1>
-          <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-neutral-600 text-pretty">Semantic search finds likely documents. Jev then checks each one against explicit questions before an answer is written.</p>
+          <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-neutral-600 text-pretty">Semantic search finds 25 candidates. Jev rejects documents below 0.5 direct relevance, then selects up to five using missing evidence coverage.</p>
         </section>
 
         <section aria-labelledby="pipeline-heading" className="mt-14 rounded-xl border border-neutral-200 bg-white p-5 shadow-sm sm:p-8">
@@ -128,7 +128,7 @@ export default function HowItWorksPage() {
                 <span>one probability per question × document</span>
                 <span className="h-px flex-1 bg-neutral-200" />
               </div>
-              <p className="mt-5 text-sm leading-6 text-neutral-600 text-pretty">Each cell estimates whether that document contains substantive evidence for one focused question.</p>
+              <p className="mt-5 text-sm leading-6 text-neutral-600 text-pretty">Jev also scores direct relevance to the original query. Selection uses 70% direct relevance and 30% marginal question coverage.</p>
             </article>
           </div>
         </section>
@@ -158,8 +158,8 @@ export default function HowItWorksPage() {
           <div className="grid gap-5 md:grid-cols-3">
             <div className="md:col-span-1">
               <p className="text-sm font-medium text-neutral-500">Grounded synthesis</p>
-              <h2 id="answer-heading" className="mt-2 text-3xl font-semibold text-neutral-950 text-balance">The answer stays connected to its sources.</h2>
-              <p className="mt-4 leading-7 text-neutral-600 text-pretty">The final model sees the question, verification checks, document text, and probabilities. It is instructed to use only that evidence, cite document IDs, and state uncertainty.</p>
+              <h2 id="answer-heading" className="mt-2 text-3xl font-semibold text-neutral-950 text-balance">The answer uses only selected content.</h2>
+              <p className="mt-4 leading-7 text-neutral-600 text-pretty">The final model sees only the user query and selected document contents. It receives no verification questions, document IDs, titles, ranks, or scores.</p>
             </div>
 
             <div className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm md:col-span-2">
@@ -167,11 +167,7 @@ export default function HowItWorksPage() {
                 <span className="text-sm font-medium text-neutral-500">Final answer</span>
                 <span className="flex items-center gap-2 text-xs text-neutral-500"><span className="size-2 rounded-full bg-emerald-600" />Grounded</span>
               </div>
-              <p className="mt-5 leading-7 text-neutral-700 text-pretty">The evidence indicates that vitamin B12 deficiency is associated with elevated homocysteine concentrations, particularly when folate status is also considered <a href="#citation-example" className="font-medium text-neutral-950 underline decoration-neutral-300 underline-offset-4">[123]</a>. The strength of the relationship varies across populations <a href="#citation-example" className="font-medium text-neutral-950 underline decoration-neutral-300 underline-offset-4">[456]</a>.</p>
-              <div id="citation-example" className="mt-6 grid gap-2 sm:grid-cols-2">
-                <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs text-neutral-600"><span className="font-mono text-neutral-400">[123]</span> B12 and homocysteine study</div>
-                <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs text-neutral-600"><span className="font-mono text-neutral-400">[456]</span> Population cohort analysis</div>
-              </div>
+              <p className="mt-5 leading-7 text-neutral-700 text-pretty">The evidence indicates that vitamin B12 deficiency is associated with elevated homocysteine concentrations, particularly when folate status is also considered. The strength of the relationship varies across populations.</p>
             </div>
           </div>
         </section>
