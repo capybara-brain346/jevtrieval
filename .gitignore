@@ -367,3 +367,6 @@ vite.config.ts.timestamp-*
 
 # Plan files
 docs/planning/
+
+# Sample
+sample.txt

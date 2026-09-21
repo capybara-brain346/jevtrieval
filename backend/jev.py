@@ -101,11 +101,7 @@ def select_documents(
         return []
 
     coverage = [0.0] * len(documents[0]["probabilities"])
-    remaining = [
-        document
-        for document in documents
-        if (document["query_probability"] or 0.0) >= 0.5
-    ]
+    remaining = documents.copy()
     selected = []
     while remaining and len(selected) < limit:
         def score(document: dict) -> float:

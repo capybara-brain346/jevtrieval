@@ -37,6 +37,103 @@ class BackendTest(unittest.IsolatedAsyncioTestCase):
             "doc_id": "7", "title": "Seven", "text": "Text", "rank": 1, "vector_score": 0.9,
         }])
 
+    async def test_hybrid_collection_is_created_with_named_vectors(self):
+        client = AsyncMock()
+        client.get.return_value = Response({}, status_code=404)
+        client.put.return_value = Response({"result": True})
+
+        await db.ensure_hybrid_collection(3, client)
+
+        self.assertEqual(
+            client.put.await_args.kwargs["json"],
+            {
+                "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
+                "sparse_vectors": {"bm25": {}},
+            },
+        )
+
+    async def test_existing_hybrid_schema_is_not_mutated(self):
+        client = AsyncMock()
+        client.get.return_value = Response({
+            "result": {
+                "config": {
+                    "params": {
+                        "vectors": {"dense": {"size": 3, "distance": "Cosine"}},
+                        "sparse_vectors": {"bm25": {}},
+                    }
+                }
+            }
+        })
+
+        await db.ensure_hybrid_collection(3, client)
+
+        client.put.assert_not_awaited()
+
+    async def test_incompatible_hybrid_schema_raises(self):
+        client = AsyncMock()
+        client.get.return_value = Response({
+            "result": {
+                "config": {
+                    "params": {
+                        "vectors": {"dense": {"size": 2, "distance": "Cosine"}},
+                        "sparse_vectors": {"bm25": {}},
+                    }
+                }
+            }
+        })
+
+        with self.assertRaises(ValueError):
+            await db.ensure_hybrid_collection(3, client)
+
+        client.put.assert_not_awaited()
+
+    async def test_hybrid_upsert_keeps_uuid_and_url_separate(self):
+        client = AsyncMock()
+        client.put.return_value = Response({"result": True})
+
+        await db.upsert_hybrid([{
+            "point_id": "550e8400-e29b-41d4-a716-446655440000",
+            "doc_id": "https://example.test/article",
+            "vector": [0.1, 0.2],
+            "sparse_vector": {"indices": [4], "values": [1.5]},
+            "title": "Title",
+            "text": "Text",
+        }], client)
+
+        point = client.put.await_args.kwargs["json"]["points"][0]
+        self.assertEqual(point["id"], "550e8400-e29b-41d4-a716-446655440000")
+        self.assertEqual(point["payload"]["doc_id"], "https://example.test/article")
+        self.assertEqual(point["vector"]["bm25"], {"indices": [4], "values": [1.5]})
+
+    async def test_hybrid_search_uses_rrf_prefetches_and_final_order(self):
+        client = AsyncMock()
+        client.post.return_value = Response({"result": {"points": [
+            {"id": "b", "score": 0.8, "payload": {"doc_id": "url-b"}},
+            {"id": "a", "score": 0.7, "payload": {"doc_id": "url-a"}},
+        ]}})
+
+        documents = await db.hybrid_search(
+            [0.1], {"indices": [2], "values": [1.0]}, 25, 5, client
+        )
+
+        query = client.post.await_args.kwargs["json"]
+        self.assertEqual([prefetch["limit"] for prefetch in query["prefetch"]], [25, 25])
+        self.assertEqual([prefetch["using"] for prefetch in query["prefetch"]], ["dense", "bm25"])
+        self.assertEqual(query["query"], {"fusion": "rrf"})
+        self.assertEqual(query["limit"], 5)
+        self.assertEqual([document["doc_id"] for document in documents], ["url-b", "url-a"])
+        self.assertEqual([document["rank"] for document in documents], [1, 2])
+        self.assertEqual([document["vector_score"] for document in documents], [0.8, 0.7])
+
+    async def test_existing_hybrid_point_lookup_returns_ids(self):
+        client = AsyncMock()
+        client.post.return_value = Response({"result": [{"id": "a"}]})
+
+        result = await db.existing_point_ids(["a", "b"], client)
+
+        self.assertEqual(result, {"a"})
+        self.assertEqual(client.post.await_args.kwargs["json"]["ids"], ["a", "b"])
+
     async def test_jev_probability_shape(self):
         result = jev._probabilities(
             {"answers": {"q_0": {"type": "noul", "noul": 0.75}}},
@@ -84,20 +181,22 @@ class BackendTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([document["doc_id"] for document in selected], ["A", "C"])
 
-    def test_selection_rejects_documents_below_direct_relevance_threshold(self):
-        selected = jev.select_documents(
-            [{
-                "doc_id": "irrelevant",
+    def test_selection_returns_five_documents_below_relevance_threshold(self):
+        documents = [
+            {
+                "doc_id": str(index),
                 "query_probability": 0.06,
-                "vector_score": 0.8,
+                "vector_score": 1 - index / 10,
                 "probabilities": [
-                    {"question": str(index), "probability": 0.06, "error": None}
-                    for index in range(5)
+                    {"question": "helper", "probability": 0.06, "error": None}
                 ],
-            }]
-        )
+            }
+            for index in range(6)
+        ]
 
-        self.assertEqual(selected, [])
+        selected = jev.select_documents(documents)
+
+        self.assertEqual([document["doc_id"] for document in selected], ["0", "1", "2", "3", "4"])
 
     async def test_answer_llm_receives_document_content_without_metadata(self):
         client = AsyncMock()
