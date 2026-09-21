@@ -19,39 +19,6 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2_000)
 
 
-def _select_documents(
-    documents: list[dict], limit: int = 5
-) -> list[dict]:
-    if not documents:
-        return []
-
-    coverage = [0.0] * len(documents[0]["probabilities"])
-    remaining = [
-        document
-        for document in documents
-        if (document["query_probability"] or 0.0) >= 0.5
-    ]
-    selected = []
-    while remaining and len(selected) < limit:
-        def score(document: dict) -> float:
-            gain = sum(
-                max(0.0, (item["probability"] or 0.0) - coverage[index])
-                for index, item in enumerate(document["probabilities"])
-            ) / len(coverage)
-            return 0.7 * (document["query_probability"] or 0.0) + 0.3 * gain
-
-        document = max(
-            remaining, key=lambda candidate: (score(candidate), candidate["vector_score"])
-        )
-        selected.append(document)
-        coverage = [
-            max(current, item["probability"] or 0.0)
-            for current, item in zip(coverage, document["probabilities"])
-        ]
-        remaining.remove(document)
-    return selected
-
-
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     application.state.http = httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10))
@@ -128,7 +95,7 @@ async def search(body: SearchRequest, request: Request):
             vector, int(os.getenv("RETRIEVAL_LIMIT", "25")), client
         )
         documents = await jev.score_documents(documents, query, questions, client)
-        documents = _select_documents(documents)
+        documents = jev.select_documents(documents)
         answer = await llm.generate_answer(query, documents, client)
         return {
             "query": query,

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from backend import db, jev, llm
-from backend.app import _select_documents, app
+from backend.app import app
 
 
 class Response:
@@ -73,7 +73,7 @@ class BackendTest(unittest.IsolatedAsyncioTestCase):
                 ],
             }
 
-        selected = _select_documents(
+        selected = jev.select_documents(
             [
                 document("A", 1.0, [1.0, 0.0], 0.9),
                 document("B", 0.9, [1.0, 0.0], 0.8),
@@ -85,7 +85,7 @@ class BackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([document["doc_id"] for document in selected], ["A", "C"])
 
     def test_selection_rejects_documents_below_direct_relevance_threshold(self):
-        selected = _select_documents(
+        selected = jev.select_documents(
             [{
                 "doc_id": "irrelevant",
                 "query_probability": 0.06,

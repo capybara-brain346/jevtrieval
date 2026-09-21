@@ -92,3 +92,36 @@ async def score_documents(
         }
 
     return list(await asyncio.gather(*(score(document) for document in documents)))
+
+
+def select_documents(
+    documents: list[dict], limit: int = 5
+) -> list[dict]:
+    if not documents:
+        return []
+
+    coverage = [0.0] * len(documents[0]["probabilities"])
+    remaining = [
+        document
+        for document in documents
+        if (document["query_probability"] or 0.0) >= 0.5
+    ]
+    selected = []
+    while remaining and len(selected) < limit:
+        def score(document: dict) -> float:
+            gain = sum(
+                max(0.0, (item["probability"] or 0.0) - coverage[index])
+                for index, item in enumerate(document["probabilities"])
+            ) / len(coverage)
+            return 0.7 * (document["query_probability"] or 0.0) + 0.3 * gain
+
+        document = max(
+            remaining, key=lambda candidate: (score(candidate), candidate["vector_score"])
+        )
+        selected.append(document)
+        coverage = [
+            max(current, item["probability"] or 0.0)
+            for current, item in zip(coverage, document["probabilities"])
+        ]
+        remaining.remove(document)
+    return selected
