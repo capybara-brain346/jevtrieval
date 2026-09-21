@@ -1,20 +1,16 @@
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_DB: jevtrieval
-      POSTGRES_USER: jevtrieval
-      POSTGRES_PASSWORD: jevtrieval
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
     ports:
-      - "5432:5432"
+      - "6333:6333"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jevtrieval -d jevtrieval"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/6333"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 5s
 
 volumes:
-  postgres_data:
+  qdrant_data:

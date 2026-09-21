@@ -1,0 +1,17 @@
+[project]
+name = "jevtrieval"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "capybara-brain346", email = "choudhari.piyush@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "uvicorn>=0.53.0",
+]
+
+[tool.uv]
+package = false
