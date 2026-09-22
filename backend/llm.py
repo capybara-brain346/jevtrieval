@@ -52,6 +52,10 @@ async def generate_questions(query: str, client: httpx.AsyncClient) -> list[str]
         json_mode=True,
     )
     questions = json.loads(content).get("questions", [])
+    questions = [
+        question.get("question") if isinstance(question, dict) else question
+        for question in questions
+    ]
     questions = list(
         dict.fromkeys(
             question.strip()

@@ -1,13 +1,22 @@
+import importlib.util
 import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from backend import db, jev, llm
 from backend.app import app
+
+
+_spec = importlib.util.spec_from_file_location(
+    "benchmark_multihoprag", Path(__file__).parents[1] / "scripts/benchmark-multihoprag.py"
+)
+benchmark = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(benchmark)
 
 
 class Response:
@@ -105,6 +114,20 @@ class BackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(point["payload"]["doc_id"], "https://example.test/article")
         self.assertEqual(point["vector"]["bm25"], {"indices": [4], "values": [1.5]})
 
+    async def test_hybrid_dense_search_uses_named_dense_vector(self):
+        client = AsyncMock()
+        client.post.return_value = Response({"result": {"points": [
+            {"id": "a", "score": 0.9, "payload": {"doc_id": "url-a"}},
+        ]}})
+
+        documents = await db.hybrid_dense_search([0.1], 25, client)
+
+        query = client.post.await_args.kwargs["json"]
+        self.assertEqual(query["using"], "dense")
+        self.assertEqual(query["limit"], 25)
+        self.assertIn("multihoprag_benchmark", client.post.await_args.args[0])
+        self.assertEqual(documents[0]["doc_id"], "url-a")
+
     async def test_hybrid_search_uses_rrf_prefetches_and_final_order(self):
         client = AsyncMock()
         client.post.return_value = Response({"result": {"points": [
@@ -133,6 +156,12 @@ class BackendTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, {"a"})
         self.assertEqual(client.post.await_args.kwargs["json"]["ids"], ["a", "b"])
+
+    async def test_missing_hybrid_collection_has_no_existing_points(self):
+        client = AsyncMock()
+        client.post.return_value = Response({}, status_code=404)
+
+        self.assertEqual(await db.existing_point_ids(["a"], client), set())
 
     async def test_jev_probability_shape(self):
         result = jev._probabilities(
@@ -198,6 +227,22 @@ class BackendTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([document["doc_id"] for document in selected], ["0", "1", "2", "3", "4"])
 
+    async def test_question_llm_accepts_question_objects(self):
+        client = AsyncMock()
+        client.post.return_value = Response({
+            "choices": [{"message": {"content": json.dumps({"questions": [
+                {"question": "First?"}, {"question": "Second?"}
+            ]})}}]
+        })
+
+        with patch.dict(os.environ, {
+            "OPENROUTER_API_KEY": "test",
+            "OPENROUTER_QUESTION_MODEL": "test-model",
+        }):
+            questions = await llm.generate_questions("Query", client)
+
+        self.assertEqual(questions, ["First?", "Second?"])
+
     async def test_answer_llm_receives_document_content_without_metadata(self):
         client = AsyncMock()
         client.post.return_value = Response({
@@ -224,6 +269,124 @@ class BackendTest(unittest.IsolatedAsyncioTestCase):
             "query": "Query",
             "documents": ["Only this content"],
         })
+
+
+class BenchmarkTest(unittest.IsolatedAsyncioTestCase):
+    def test_corpus_urls_have_stable_uuid_points(self):
+        document = benchmark.normalize_corpus([
+            {"url": "https://example.test/a", "title": "Title", "body": "Body"}
+        ])[0]
+
+        self.assertEqual(document["doc_id"], "https://example.test/a")
+        self.assertEqual(document["point_id"], benchmark.point_id_for_url(document["doc_id"]))
+        self.assertEqual(document["text"], "Title\n\nBody")
+
+    def test_tokenization_and_bm25_vectors_are_deterministic(self):
+        self.assertEqual(benchmark.tokenize("Café, CAFÉ_2!"), ["café", "café_2"])
+        documents = benchmark.normalize_corpus([
+            {"url": "https://example.test/a", "title": "Alpha", "body": "beta beta"},
+            {"url": "https://example.test/b", "title": "Gamma", "body": "beta"},
+        ])
+        stats = benchmark.bm25_statistics(documents)
+        vector = benchmark.bm25_document_vector(
+            benchmark.tokenize(documents[0]["text"]),
+            stats["vocabulary"],
+            stats["document_frequencies"],
+            stats["document_count"],
+            stats["average_length"],
+        )
+
+        self.assertEqual(stats["vocabulary"], {"alpha": 0, "beta": 1, "gamma": 2})
+        self.assertEqual(benchmark.bm25_query_vector("GAMMA beta", stats["vocabulary"]), {
+            "indices": [1, 2], "values": [1.0, 1.0]
+        })
+        self.assertEqual(vector["indices"], [0, 1])
+        self.assertEqual(len(vector["values"]), 2)
+
+    def test_embedding_text_respects_provider_token_limit(self):
+        text = "token " * (benchmark.EMBEDDING_TOKEN_LIMIT + 100)
+
+        truncated = benchmark.embedding_text(text)
+
+        self.assertEqual(
+            len(benchmark.EMBEDDING_ENCODING.encode(truncated)),
+            benchmark.EMBEDDING_TOKEN_LIMIT,
+        )
+
+    def test_retrieval_metrics(self):
+        retrieved = ["noise", "b", "a"]
+        relevant = {"a", "b"}
+
+        self.assertEqual(benchmark.recall_at_5(retrieved, relevant), 1.0)
+        self.assertEqual(benchmark.all_evidence_at_5(retrieved, relevant), 1.0)
+        self.assertEqual(benchmark.mrr_at_5(retrieved, relevant), 0.5)
+        self.assertAlmostEqual(benchmark.ndcg_at_5(retrieved, relevant), (1 / 2 + 1 / 1.5849625007) / (1 + 1 / 1.5849625007))
+
+    async def test_indexing_resumes_without_reembedding_existing_points(self):
+        documents = benchmark.normalize_corpus([
+            {"url": "https://example.test/a", "title": "A", "body": "a"},
+            {"url": "https://example.test/b", "title": "B", "body": "b"},
+            {"url": "https://example.test/c", "title": "C", "body": "c"},
+        ])
+        with (
+            patch.object(benchmark.db, "existing_point_ids", AsyncMock(side_effect=[
+                {documents[0]["point_id"]}, set()
+            ])),
+            patch.object(benchmark.embeddings, "embed_many", AsyncMock(side_effect=[
+                [[0.1, 0.2]], [[0.3, 0.4]]
+            ])) as embed_many,
+            patch.object(benchmark.db, "ensure_hybrid_collection", AsyncMock()) as ensure,
+            patch.object(benchmark.db, "upsert_hybrid", AsyncMock()) as upsert,
+            patch.object(benchmark.db, "hybrid_count", AsyncMock(return_value=3)),
+        ):
+            count = await benchmark.index_documents(documents, AsyncMock(), 2)
+
+        self.assertEqual(count, 3)
+        self.assertEqual(embed_many.await_args_list[0].args[0], [documents[1]["text"]])
+        self.assertEqual(embed_many.await_args_list[1].args[0], [documents[2]["text"]])
+        ensure.assert_awaited_once()
+        self.assertEqual(ensure.await_args.args[0], 2)
+        self.assertEqual(upsert.await_count, 2)
+
+    async def test_invalid_query_is_recorded_without_scoring_it(self):
+        aggregate, records, failures = await benchmark.run_benchmark(
+            [(10, {"query": "No evidence", "question_type": "factoid", "evidence_list": []})],
+            {},
+            AsyncMock(),
+        )
+
+        self.assertEqual(aggregate["jev"]["attempted"], 1)
+        self.assertEqual(aggregate["jev"]["successful"], 0)
+        self.assertIsNotNone(records[0]["error"])
+        self.assertEqual(failures[0]["method"], "benchmark")
+
+    def test_selection_and_method_order(self):
+        examples = [{"query": str(index), "question_type": "inference_query"} for index in range(4)]
+
+        selected = benchmark.select_examples(examples, 1, 2, "inference_query")
+
+        self.assertEqual([index for index, _ in selected], [1, 2])
+        self.assertEqual(benchmark.method_order(0), ("jev", "rag"))
+        self.assertEqual(benchmark.method_order(1), ("rag", "jev"))
+
+    async def test_method_failure_does_not_discard_other_method(self):
+        example = {
+            "query": "Question",
+            "question_type": "inference_query",
+            "evidence_list": [{"url": "https://example.test/a"}],
+        }
+        with (
+            patch.object(benchmark.llm, "generate_questions", AsyncMock(side_effect=RuntimeError("no Jev"))),
+            patch.object(benchmark.embeddings, "embed", AsyncMock(return_value=[0.1])),
+            patch.object(benchmark.db, "hybrid_search", AsyncMock(return_value=[{"doc_id": "https://example.test/a"}])),
+            patch.object(benchmark.llm, "generate_answer", AsyncMock()) as answer,
+        ):
+            record, failures = await benchmark.benchmark_example(0, example, {"question": 0}, AsyncMock())
+
+        self.assertIsNotNone(record["jev"]["error"])
+        self.assertIsNone(record["rag"]["error"])
+        self.assertEqual(failures[0]["method"], "jev")
+        answer.assert_not_awaited()
 
 
 class ApiTest(unittest.TestCase):

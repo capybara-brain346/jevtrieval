@@ -189,6 +189,24 @@ async def upsert_hybrid(
     response.raise_for_status()
 
 
+async def hybrid_dense_search(
+    vector: list[float], limit: int, client: httpx.AsyncClient
+) -> list[dict[str, Any]]:
+    response = await client.post(
+        f"{_hybrid_collection_url()}/points/query",
+        headers=_headers(),
+        json={
+            "query": vector,
+            "using": "dense",
+            "limit": limit,
+            "with_payload": True,
+            "with_vector": False,
+        },
+    )
+    response.raise_for_status()
+    return _normalize_points(response.json().get("result", {}).get("points", []))
+
+
 async def hybrid_search(
     dense_vector: list[float],
     sparse_vector: dict[str, Any],
@@ -222,9 +240,23 @@ async def existing_point_ids(
         headers=_headers(),
         json={"ids": ids, "with_payload": False, "with_vector": False},
     )
+    if response.status_code == 404:
+        return set()
     response.raise_for_status()
     return {
-        point["id"]
+        str(point["id"])
         for point in response.json().get("result", [])
         if "id" in point
     }
+
+
+async def hybrid_count(client: httpx.AsyncClient) -> int:
+    response = await client.post(
+        f"{_hybrid_collection_url()}/points/count",
+        headers=_headers(),
+        json={"exact": True},
+    )
+    if response.status_code == 404:
+        return 0
+    response.raise_for_status()
+    return int(response.json()["result"]["count"])

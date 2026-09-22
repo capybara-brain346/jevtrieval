@@ -43,3 +43,18 @@ POST /v1/search  {"query":"..."}
 ```
 
 The search response contains the generated questions and up to five documents selected from 25 vector candidates. Documents need at least 0.5 direct-query relevance; eligible documents are selected using 70% direct relevance and 30% question-coverage gain.
+
+## MultiHopRAG benchmark
+
+The offline benchmark imports backend modules directly; it does not add benchmark API routes. Download or verify both dataset files, start Qdrant, then index the corpus:
+
+```sh
+scripts/download-multihoprag.sh
+uv run --env-file .env python scripts/benchmark-multihoprag.py index
+uv run --env-file .env python scripts/benchmark-multihoprag.py run \
+  --limit 10 \
+  --output data/multihoprag/results/validation.json \
+  --records data/multihoprag/results/validation.jsonl
+```
+
+Indexing validates the corpus before the first embedding request, resumes by skipping existing UUID5 points, reports progress, and verifies the final Qdrant count. It compares Jev retrieval with dense-plus-BM25 RRF retrieval using Recall@5, AllEvidence@5, MRR@5, and nDCG@5. `--limit` is required for benchmark runs; use `--offset`, `--question-type`, and `--seed` to select another reproducible slice.
